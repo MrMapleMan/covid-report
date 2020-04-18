@@ -1,10 +1,22 @@
 import re
 import subprocess
+import sys
+import datetime
+import os
 
 fa = re.findall
+us = False
 
-# Store color escape codes
-class colors:
+if len(sys.argv) > 1:
+  # Save args with hyphens, spaces, equal signs removed
+  argsModified = [i.lower().replace('-','').replace(' ','') .replace('=','')for i in sys.argv]
+  if 'globaltrue' in argsModified or 'usfalse' in argsModified:
+    us = False
+  elif 'globalfalse' in argsModified or 'ustrue' in argsModified:
+    us = True
+
+# Store escape codes for terminal output
+class codes:
     MAGENTA = '\033[95m'
     BLUE = '\033[94m'
     GREEN = '\033[92m'
@@ -15,54 +27,96 @@ class colors:
     UNDERLINE = '\033[4m'
 
 # Download worldometers latest info
-subprocess.call('curl https://www.worldometers.info/coronavirus/ > /tmp/worldometers.txt 2>/dev/null',shell=True)
+if us:
+  site = 'https://www.worldometers.info/coronavirus/country/us'
+  siteSaveFile = '/tmp/coronavirus-us.txt'
+  headerFile = 'header.txt'
+  outputFile = 'us-covid-table.csv'
+else:
+  site = 'https://www.worldometers.info/coronavirus/'
+  siteSaveFile = '/tmp/coronavirus-global.txt'
+  headerFile = 'header-global.txt'
+  outputFile = 'global-covid-table.csv'
+subprocess.call('curl '+site+' > '+siteSaveFile+' 2>/dev/null',shell=True)
+
+# Store column headers
+with open(headerFile) as f:
+  headerStr = f.read()
+headers = [i.strip('\n ') for i in headerStr.split(',')]
+headersLength = len(headers)
+
+outputFile = '/tmp/'+outputFile
+dataSeparator = ';'
+
+# Save headers to csv
+with open(outputFile,'w+') as f:
+  f.write(dataSeparator.join(headers)+'\n')
 
 def floatFromText(s):
   return float(''.join(fa('[0-9]+',s)))
 
+# Extract data relevant to a particular state (or other line in the table)
+def getValues(state):
+  section = fa('<tr.{,200}?'+state+' ?(?:</a>)?.{1,1000}?</tr>',s,re.DOTALL)[0]
+  section = section[section.find('</td>'):]	# Remove first element of table HTML
+  vals_without_state = [i.strip('\n ') for i in fa('<td.*?>(.*?)(?:</a>)?</td>',section,re.DOTALL)]
+  return [state] + vals_without_state	# Prepend state name to list and return it
+
+def findAndPrintStates():
+  snippets = fa('<tr.{0,100}?>.{1,50}?</td>',s,re.DOTALL)
+  for i in snippets: print i
+
 # Read the text from the web retrieval
-with open('/tmp/worldometers.txt') as f:
+with open(siteSaveFile) as f:
   s = f.read()
 
-# Find total cases
-totalCasesWithCommas = fa('Coronavirus Cases.{1,250}?(\d+,\d{3}(?:,\d{3}){,5})',s,re.DOTALL)[0]
-totalCases = floatFromText(totalCasesWithCommas)
+# Find cases in regions of interest
+if us:
+  regions = ['USA Total','California','Utah','Ohio','New York','Louisiana','Florida','Pennsylvania','Minnesota','South Carolina']
+else:
+  regions = ['World','USA','Spain','Italy','China','Iran','India','S. Korea','Canada','Ireland']
+for region in regions:
+  print(codes.BOLD + codes.MAGENTA + region+':' + codes.RESET)
+  vals = getValues(region)
+  with open(outputFile,'a') as f:
+    f.write(dataSeparator.join(vals)+'\n')
 
-# Find deaths
-fatalCasesWithCommas = fa('Deaths.{1,250}?(\d+,\d{3}(?:,\d{3}){,5})',s,re.DOTALL)[0]
-fatalCases = floatFromText(fatalCasesWithCommas)
+  # Calculate additional parameters
+  stringsOfInterest = [vals[headers.index(i)] for i in ['Total Cases','Total Deaths','Active Cases']]
+  totalCases,totalDeaths,activeCases = [float(i.replace(',','')) for i in stringsOfInterest]
+  recoveredCases = totalCases - (activeCases + totalDeaths)	# Compute recoveries
+  totalResolved = totalCases - activeCases			# Compute resolved (also equals recoveries + deaths)
+  deathsPercentResolved = totalDeaths/totalResolved*100		# Percent of resolved cases which were fatalities
+  recoveredPercentResolved = 100-deathsPercentResolved		# Percent of resolved cases which were recoveries
+  # Display the data
+  for i,j in enumerate([i for i in vals[:headersLength]]):
+    txt = '  %20s   %s' %(headers[i],j[:30])
+    # Add information after 'Total Deaths' section
+    if(headers[i] == 'Total Deaths'):
+      # Calculate CFR, statistics on resolved cases
+      txt += '  (CFR: %.2f%% Resolved: %s [%s%.2f%%%s Fatal, %s%.2f%%%s Recovered])' %(
+              totalDeaths/totalCases*100, '{:,.0f}'.format(totalResolved),
+              codes.RED,   deathsPercentResolved,    codes.RESET,
+              codes.GREEN, recoveredPercentResolved, codes.RESET)
+    # Add information after 'Active Cases' section
+    elif(headers[i] == 'Active Cases'):
+      txt += '  (%sActive: %.2f%% Resolved: %s%.2f%%%s)' %(
+              codes.RESET, activeCases/totalCases*100, codes.BLUE,totalResolved/totalCases*100, codes.RESET)
+    # Do not print out sources information here
+    elif(headers[i] == 'Source'):
+      continue
+    print(txt)
+  print('')
+  # End of 'for i,j in enumerate([i for i in vals]):'
+# End of 'for region in...'
 
-# Find recoveries
-recoveredCasesWithCommas = fa('Recovered.{1,550}?(\d+,\d{3}(?:,\d{3}){,5})',s,re.DOTALL)[0]
-recoveredCases = floatFromText(recoveredCasesWithCommas)
+print('From '+codes.BLUE+codes.BOLD+site+codes.RESET+' (retrieved %s).' %(datetime.datetime.strftime(datetime.datetime.now(),'%m-%d-%Y at %H:%M:%S')))
 
-# Total recovered and percentages
-resolvedCases = fatalCases + recoveredCases
-percentResolved = resolvedCases/totalCases*100
-percentFatal = fatalCases / resolvedCases * 100
-percentRecovered = 100 - percentFatal
-
-# Find active cases
-activeCasesWithCommas = fa('Active Cases.{1,550}?(\d+,\d{3}(?:,\d{3}){,5})',s,re.DOTALL)[0]
-activeCases = floatFromText(activeCasesWithCommas)
-percentActive = activeCases / totalCases * 100
-
-# Separate mild and severe
-mildCasesWithCommas = fa('(\d+,\d{3}(?:,\d{3}){,5})</span>.{,200}?in Mild Condition',s,re.DOTALL)[0]
-mildCases = floatFromText(mildCasesWithCommas)
-percentMild = mildCases / activeCases * 100
-severeCasesWithCommas = fa('(\d+,\d{3}(?:,\d{3}){,5})</span>.{,200}?Serious or Critical',s,re.DOTALL)[0]
-severeCases = floatFromText(severeCasesWithCommas)
-percentSevere = severeCases / activeCases * 100
-
-print('\nTotal cases: %s' %(colors.BOLD+colors.GREEN+'{:,}'.format(int(totalCases))+colors.RESET) )
-
-print('\nActive cases: %s (%.2f%% of total)\n\t(Severe: %s [%.2f%%] Mild: %s [%.2f%%])' %(
-      activeCasesWithCommas, percentActive,
-      colors.BOLD+colors.RED+severeCasesWithCommas+colors.RESET, percentSevere,
-      colors.BOLD+colors.GREEN+mildCasesWithCommas+colors.RESET, percentMild) )
-
-print('\nResolved cases: %s (%.2f%% of total)\n\t(Fatal: %s (%.2f%%) Recovered: %s (%.2f%%))' %(
-      '{:,}'.format(int(resolvedCases)), percentResolved, 
-      colors.BOLD+colors.RED+fatalCasesWithCommas+colors.RESET, percentFatal,
-      colors.BOLD+colors.GREEN+recoveredCasesWithCommas+colors.RESET, percentRecovered) )
+# Save a timestamped copy of the file
+if os.path.isfile(outputFile):
+  dtString = datetime.datetime.strftime(datetime.datetime.now(), '%Y-%m-%d')
+  firstIdx = outputFile.rfind('/')+1
+  lastIdx  = outputFile.rfind('.')   
+  copyName = outputFile[firstIdx:lastIdx] + '.' + dtString
+  subprocess.call('mkdir -p ~/covid-data',shell=True)                           # Ensure that directory path exists
+  subprocess.call('cp '+outputFile+' ~/covid-data/'+copyName, shell=True)       # Copy file to desired location
