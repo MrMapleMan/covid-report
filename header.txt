@@ -1,0 +1,2 @@
+
+State,Total Cases,New Cases,Total Deaths,New Deaths,Active Cases,Tot Cases/1M pop,Deaths/1M pop,Total Tests,Tests/1M pop,Source
