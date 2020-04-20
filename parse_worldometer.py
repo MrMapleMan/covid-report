@@ -82,26 +82,39 @@ for region in regions:
     f.write(dataSeparator.join(vals)+'\n')
 
   # Calculate additional parameters
-  stringsOfInterest = [vals[headers.index(i)] for i in ['Total Cases','Total Deaths','Active Cases']]
-  totalCases,totalDeaths,activeCases = [float(i.replace(',','')) for i in stringsOfInterest]
+  searchList = ['Total Cases','Total Deaths','Active Cases','Serious/Critical']
+  if us:
+    searchList.pop(searchList.index('Serious/Critical'))
+  stringsOfInterest = [vals[headers.index(i)] for i in searchList]
+  deathsPerMillionStr = vals[headers.index('Deaths/1M pop')]
+  deathsPerMillion = float(deathsPerMillionStr) if deathsPerMillionStr != '' else 0
+  if not us:
+    totalCases,totalDeaths,activeCases,seriousCases = [float(i.replace(',','')) if not i == '' else 0 for i in stringsOfInterest]
+  else:
+      totalCases,totalDeaths,activeCases = [float(i.replace(',','')) if not i == '' else 0 for i in stringsOfInterest]
   recoveredCases = totalCases - (activeCases + totalDeaths)	# Compute recoveries
   totalResolved = totalCases - activeCases			# Compute resolved (also equals recoveries + deaths)
   deathsPercentResolved = totalDeaths/totalResolved*100		# Percent of resolved cases which were fatalities
   recoveredPercentResolved = 100-deathsPercentResolved		# Percent of resolved cases which were recoveries
   # Display the data
   for i,j in enumerate([i for i in vals[:headersLength]]):
-    txt = '  %20s   %s' %(headers[i],j[:30])
+    txt = '  {:>20s}  {:<10s}  '.format(headers[i],j[:30])
     # Add information after 'Total Deaths' section
     if(headers[i] == 'Total Deaths'):
       # Calculate CFR, statistics on resolved cases
-      txt += '  (CFR: %.2f%% Resolved: %s [%s%.2f%%%s Fatal, %s%.2f%%%s Recovered])' %(
+      txt += '(CFR: %.2f%% Resolved: %s [%s%.2f%%%s Fatal, %s%.2f%%%s Recovered])' %(
               totalDeaths/totalCases*100, '{:,.0f}'.format(totalResolved),
               codes.RED,   deathsPercentResolved,    codes.RESET,
               codes.GREEN, recoveredPercentResolved, codes.RESET)
     # Add information after 'Active Cases' section
     elif(headers[i] == 'Active Cases'):
-      txt += '  (%sActive: %.2f%% Resolved: %s%.2f%%%s)' %(
+      txt += '(%sActive: %.2f%% Resolved: %s%.2f%%%s)' %(
               codes.RESET, activeCases/totalCases*100, codes.BLUE,totalResolved/totalCases*100, codes.RESET)
+    elif('Serious' in headers[i]):
+      percentSerious = seriousCases/activeCases*100
+      txt += '(%sSerious/Critical: %.2f%% Mild: %.2f%%%s)' %(codes.RESET, percentSerious, 100-percentSerious, codes.RESET)
+    elif('Deaths/1M' in headers[i]):
+      txt += '(%s%.3f%% of population%s)' %(codes.RESET, deathsPerMillion*1E-6*100, codes.RESET)
     # Do not print out sources information here
     elif(headers[i] == 'Source'):
       continue
