@@ -1,3 +1,24 @@
+# Author:       John Henrie
+# Date:         April 18, 2020
+# Description:  Compare different methods for estimating the CFR in an ongoing
+#               pandemic. Plots of particular interest:
+#                 - CFR-simulation-zoomed.png
+#                 - Fatality-count-simulation.png
+#
+#               My CFR method only considers fatalities that have occurred at t-delta,
+#               where delta is the difference between an average recovery time and
+#               average fatality time.  Look for 'deathCountLag' and CFR_Lag
+#               computations to see how this is implemented.
+#
+#               Example usage: python3 rate_estimate_simulation.py --print_progression=False --make_animation=False --cf$
+#               Note: flags are optional; must have matplotlib installed
+#                 ('sudo pip3 install matplotlib' on linux)
+#
+# Optional flags:
+#  --print_progression=True/False default: False
+#  --make_animation=True/False    default: False
+#  --cfr=0.##                     default: 0.025 (2.5%)
+
 from datetime import datetime, timedelta
 import random
 from matplotlib import pyplot as plt
@@ -8,11 +29,17 @@ import subprocess
 import sys
 
 # Future tasks:
-#   Include unaccounted recoveries
-#   Include naturally immune?
+#   [DONE] Update using a more realistic distribution rather than uniform
+#   [DONE] Generate animation
+#   [DONE] Allow passing in parameters via flags (actualCFR, make_animation, other)
+#   Give user option to auto-generate video after animation
+#   Separate unaccounted recoveries from known recoveries
+#   Include naturally immune
+#   Include effects of different countermeasures being introduced or removed
+#   Make agnostic to OS
 
 class pandemicInfo:
-  actualCFR      = 0.05			# Likelihood that infection is fatal
+  actualCFR      = 0.025		# Likelihood that infection is fatal
   populationSize = 100000		# Total population for simulation
   recoverySpread = 3                    # Range for recovery times (+/-) [days]
   fatalitySpread = 1                    # Range for fatality times (+/-) [days]
@@ -21,7 +48,25 @@ class pandemicInfo:
   infectionRatio = 0.60			# Portion of population that becomes infected
   beta		 = 2			# Shape parameter (higher beta implies tighter spread of infection dates)
 
-def runSimulation(doPrint=False,params=pandemicInfo(),showPlots=False):
+def parseCommandLineArgs(argsIn):
+  argsIn = [i.lower().replace('-','') for i in argsIn] # remove hyphens
+
+  # Get strings of post-equals-sign for each argument (if present)
+  printFlag = [i[i.find('=')+1:] for i in argsIn if 'print_progression=' in i]
+  animationFlag = [i[i.find('=')+1:] for i in argsIn if 'make_animation=' in i]
+  cfrFlag = [i[i.find('=')+1:] for i in argsIn if 'cfr=' in i]
+
+  # Save with correct types or supply default values if arg not passed
+  printBoolean = bool(printFlag[0]) if len(printFlag) == 1 else False
+  animationBoolean = bool(animationFlag[0]) if len(animationFlag) == 1 else False
+  CFR_Float = float(cfrFlag[0]) if len(cfrFlag) == 1 else pandemicInfo.actualCFR
+
+  # Convert to unitless if passed as percentage
+  if CFR_Float > 1.0:
+    CFR_Float /= 100.0
+  return [printBoolean, animationBoolean, CFR_Float]
+
+def runSimulation(doPrint=False,params=pandemicInfo(),showPlots=False,cfrArg=None,makeAnimation=False):
   # Define simulation parameters
   firstPossible  = datetime(2020,1,1)	# First possible date for contracting virus
   lastPossible   = datetime(2020,6,30)	# Last date of simulated outbreak
@@ -33,6 +78,8 @@ def runSimulation(doPrint=False,params=pandemicInfo(),showPlots=False):
   fatalityBase   = params.fatalityBase
   beta 		 = params.beta
   infectionRatio = params.infectionRatio
+  if cfrArg is not None:
+    actualCFR = cfrArg	# Overwrite default value if one was given
 
   # Average time difference between a fatality vs a countable recovery
   deathRecoveryDelta  = recoveryBase - fatalityBase
@@ -57,7 +104,7 @@ def runSimulation(doPrint=False,params=pandemicInfo(),showPlots=False):
     # Determine expected number of infected
     t = float(i)
     ratioInfected = (1-math.exp(-((t/eta)**beta))) - (1-math.exp(-(((t-1)/eta)**beta)))
-    ratioInfected *= infectionRatio
+    ratioInfected *= infectionRatio # Infection ratio: total % of population to become infected
     infections = float(populationSize)*ratioInfected/(1-R)
 
     caseCount.append(infections)
@@ -100,17 +147,23 @@ def runSimulation(doPrint=False,params=pandemicInfo(),showPlots=False):
   CFR_True		 = []
   percentActive	 	 = []
 
+  # Generate simulation data for all days
   for j in reportDates:
+
     deathCountSimple	= len([day for day in fatalResolveDates if day <= j])
     recoveryCountSimple = len([day for day in recoverableResolveDates if day <= j])
 
+    # John's method of estimating CFR
+    # Only count fatalities that likely had a similar infection time to cases that are currently recovering
     recoveryCountLag    = recoveryCountSimple
     deathCountLag       = len([day for day in fatalResolveDates if day <= j-timedelta(deathRecoveryDelta)])
 
+    # Basic approach to CFR (results in underestimate early on)
     caseCountSimple	= len([day for day in fatalStartDates if (day <= j)])
     caseCountSimple     += len([day for day in recoverableStartDates if (day<=j)])
 
     # Count all prior deaths and current cases that will result in deaths
+    # This uses information that you don't have during the pandemic, only after it has ended
     deathCountTrue      = len([day for day in fatalStartDates if day <= j])
 
     deathsSimple.append(deathCountSimple)
@@ -176,7 +229,10 @@ def runSimulation(doPrint=False,params=pandemicInfo(),showPlots=False):
 
   # Save figures for simulation animation
   tStart = time.time()
-  for i in range(int(float(len(days))*.0),len(days)):  
+  startDay = 0 if makeAnimation else len(days)-1			 # Start at last day if no animation requested, else start from t=0 days
+  simPlotFolder = 'simulation-animation-plots/' if makeAnimation else '' # Save to dedicated location only if making numerous figures for animation
+  simDirPath = homePath + simPlotFolder
+  for i in range(startDay,len(days)):  
     plt.cla()
     # Add plot lines
     plt.plot(days[:i+1],deathsSimple[:i+1],label='Deaths')
@@ -206,17 +262,23 @@ def runSimulation(doPrint=False,params=pandemicInfo(),showPlots=False):
     plt.text(days[i],deathsSimple[i]-offset,'{:,.2f}%'.format(deathsSimple[i]/populationSize*100),horizontalalignment='right',verticalalignment='top')
     plt.text(days[i],recoveriesSimple[i]+rcvsOfst,'{:,.2f}%'.format(recoveriesSimple[i]/populationSize*100),horizontalalignment='right',verticalalignment=rcvsLoc)
     # Save plot
-    figpath = homePath + 'simulation-animation-plots/' + 'Fatality-count-simulation-%03d.png' % i
+    figpath = simDirPath + 'Fatality-count-simulation-%03d.png' % i
     plt.savefig(figpath)
-    sys.stdout.write('\rSaved animation plot %03d of %03d (%.1f%% completed in %02.1f seconds).\t%8.1f %8.1f' %(
-                      i+1,len(days), float(i+1)/float(len(days))*100, time.time() - tStart, unfctdOfst, rcvsOfst) )
-    sys.stdout.flush()
-  print('\nSaved animation plots to'+os.path.expanduser('~/simulation-animation-plots/'))
-  print('Example command to generate animation video:\n\tffmpeg -r 10 -f image2 -i ~/simulation-animation-plots/Fatality-count-simulation-%03d.png -vcodec libx264 -crf 25  -pix_fmt yuv420p test.mp4')
+    if(makeAnimation):
+      sys.stdout.write('\rSaved animation plot %03d of %03d (%.1f%% completed in %02.1f seconds).' %(
+                        i+1,len(days), float(i+1)/float(len(days))*100, time.time() - tStart) )
+      sys.stdout.flush()
+  if(makeAnimation):
+    print('\nSaved animation plots to'+simDirPath)
+  else:
+    print('Saved simulation plot to '+simDirPath+'Fatality-count-simulation-%03d.png' %(len(days)-1))
+  print('Example linux command to generate animation video:\n\tffmpeg -r 10 -f image2 -i ~/simulation-animation-plots/Fatality-count-simulation-%03d.png -vcodec libx264 -crf 25  -pix_fmt yuv420p test.mp4')
 
   if(showPlots):
     plt.show()
 # End runSimulation()
 
 if __name__ == '__main__':
-  runSimulation(doPrint=False)
+  printBool, animationBool, CFR_Value = parseCommandLineArgs(sys.argv)
+  runSimulation(doPrint=printBool, makeAnimation=animationBool, cfrArg=CFR_Value)
+
