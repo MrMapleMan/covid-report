@@ -4,6 +4,8 @@ from matplotlib import pyplot as plt
 import os
 import math
 import time
+import subprocess
+import sys
 
 # Future tasks:
 #   Include unaccounted recoveries
@@ -72,15 +74,18 @@ def runSimulation(doPrint=False,params=pandemicInfo(),showPlots=False):
 
   totalInfections = len(fatalStartDates)+len(recoverableStartDates)
   
-  print('(Remove after testing) infections: %s (%4.1f%% of population) fatal: %s (%4.2f%% of cases) recovered: %s' %(
-	 '{:,}'.format(totalInfections), float(totalInfections)/populationSize*100, '{:,}'.format(len(fatalStartDates)),
-         float(len(fatalStartDates))/totalInfections*100,'{:,}'.format(len(recoverableStartDates)) ) )
+  print('Infections: {:,} ({:4.1f}% of population) fatal: {:,} ({:4.2f}% of cases) recovered: {:,}'.format(
+	 totalInfections, float(totalInfections)/populationSize*100, len(fatalStartDates),
+         float(len(fatalStartDates))/totalInfections*100,len(recoverableStartDates) ) )
   
   # Plot new cases for verification
   plt.figure()
   plt.plot(range(lengthDays),caseCount)
+  plt.title('Daily Case Count')
+  plt.xlabel('Days')
+  plt.ylabel('New Cases')
   plt.savefig(os.path.expanduser('~/case-count-simulation.png'))
-  print('(Remove after testing) Saved plot to '+os.path.expanduser('~/case-count-simulation.png'))
+  print('Saved plot to '+os.path.expanduser('~/case-count-simulation.png'))
 
   # For each reporting day, calculate different CFRs (simple CFR, resolved-only CFR, lagging resolved-only CFR)
   reportDates = [firstPossible + timedelta(i) for i in range(lengthDays+25)]
@@ -130,7 +135,7 @@ def runSimulation(doPrint=False,params=pandemicInfo(),showPlots=False):
               dayStr,deathCountSimple,deathCountLag,recoveryCountSimple,caseCountSimple, 
               CFR_Simple[-1],CFR_Resolved[-1],CFR_Lag[-1],CFR_True[-1],percentActive[-1] ) )
   tEnd = time.time()
-  print('%.2f seconds to complete simulation.' %(tEnd-tStart))
+  print('{:.2f} seconds to complete simulation for population of {:,}.'.format(tEnd-tStart, populationSize))
 
   # Plot results
   homePath = os.path.expanduser('~/')
@@ -147,6 +152,7 @@ def runSimulation(doPrint=False,params=pandemicInfo(),showPlots=False):
   plt.savefig(figpath)
   print('Saved plot to %s' %figpath)
 
+  # Plot zoomed in CFR
   plt.figure()
   plt.plot(days,CFR_Simple,label='CFR Simple')
   plt.plot(days,CFR_Resolved,label='CFR Resolved')
@@ -154,21 +160,59 @@ def runSimulation(doPrint=False,params=pandemicInfo(),showPlots=False):
   plt.plot(days,CFR_True,label='CFR True')
   plt.plot(days,percentActive,label='% Active')
   plt.title('CFR by Multiple Methods')
-  plt.ylim([0,.2])
+  plt.ylim([0,20])
+  yTicks = plt.yticks()
+  yLabels = [str(i)+'%' for i in yTicks[0]]
+  plt.yticks(ticks=yTicks[0],labels=yLabels)
   plt.legend()
-  figpath = homePath + 'CFR-simulation-select.png'
+  figpath = homePath + 'CFR-simulation-zoomed.png'
   plt.savefig(figpath)
   print('Saved plot to %s' %figpath)
-  
-  plt.figure()
-  plt.plot(days,deathsSimple,label='Simple')
-  plt.plot(days,deathsLag,label='Lag')
-  plt.plot(days,uninfectedCount,label='Uninfected')
-  plt.plot(days,recoveriesSimple,label='Recovered')
-  plt.legend()
-  figpath = homePath + 'Deaths-simulation.png'
-  plt.savefig(figpath)
-  print('Saved plot to %s' %figpath)
+
+  subprocess.call('mkdir -p ~/simulation-animation-plots',shell=True)
+
+  maxDeltaRcvs   = max([abs(recoveriesSimple[i]-recoveriesSimple[i-1]) for i in range(1,len(recoveriesSimple))])
+  maxDeltaUnfctd = max([abs(uninfectedCount[i]-uninfectedCount[i-1]) for i in range(1,len(uninfectedCount))])
+
+  # Save figures for simulation animation
+  tStart = time.time()
+  for i in range(int(float(len(days))*.0),len(days)):  
+    plt.cla()
+    # Add plot lines
+    plt.plot(days[:i+1],deathsSimple[:i+1],label='Deaths')
+    plt.plot(days[:i+1],uninfectedCount[:i+1],label='Uninfected')
+    plt.plot(days[:i+1],recoveriesSimple[:i+1],label='Recovered')
+    plt.title('Simulated Case Tracking Over Time: Day %03d' %i)
+    plt.xlabel('Time [days]')
+    plt.ylabel('Cases')
+    plt.legend()
+    offset = populationSize*.015
+    # Choose text locations to avoid interfering with each other
+    rcvsLoc = 'bottom' if (recoveriesSimple[i] > uninfectedCount[i] or recoveriesSimple[i] - deathsSimple[i] < populationSize*.12) else 'top'
+    rcvsOfst = offset if rcvsLoc == 'bottom' else -offset
+    if rcvsLoc == 'top' or recoveriesSimple[i] > uninfectedCount[i]:
+      dlta = abs(recoveriesSimple[i] - recoveriesSimple[i-1])
+      rcvsOfst += (4.0*offset*dlta/maxDeltaRcvs)*(abs(rcvsOfst)/rcvsOfst)
+
+    unfctdLoc = 'bottom' if (uninfectedCount[i] > recoveriesSimple[i])  else 'top'
+    unfctdOfst = offset if unfctdLoc == 'bottom' else -offset
+    if uninfectedCount[i] < float(populationSize)*.95:
+      dlta = abs(uninfectedCount[i] - uninfectedCount[i-1])
+      unfctdOfst += (4.0*offset*dlta/maxDeltaUnfctd)*(abs(unfctdOfst)/unfctdOfst)
+    else:
+      unfctdOfst = populationSize - uninfectedCount[i]
+    # Add labels to plots
+    plt.text(days[i],uninfectedCount[i]+unfctdOfst,'{:,.2f}%'.format(uninfectedCount[i]/populationSize*100),horizontalalignment='right',verticalalignment=unfctdLoc)
+    plt.text(days[i],deathsSimple[i]-offset,'{:,.2f}%'.format(deathsSimple[i]/populationSize*100),horizontalalignment='right',verticalalignment='top')
+    plt.text(days[i],recoveriesSimple[i]+rcvsOfst,'{:,.2f}%'.format(recoveriesSimple[i]/populationSize*100),horizontalalignment='right',verticalalignment=rcvsLoc)
+    # Save plot
+    figpath = homePath + 'simulation-animation-plots/' + 'Fatality-count-simulation-%03d.png' % i
+    plt.savefig(figpath)
+    sys.stdout.write('\rSaved animation plot %03d of %03d (%.1f%% completed in %02.1f seconds).\t%8.1f %8.1f' %(
+                      i+1,len(days), float(i+1)/float(len(days))*100, time.time() - tStart, unfctdOfst, rcvsOfst) )
+    sys.stdout.flush()
+  print('\nSaved animation plots to'+os.path.expanduser('~/simulation-animation-plots/'))
+  print('Example command to generate animation video:\n\tffmpeg -r 10 -f image2 -i ~/simulation-animation-plots/Fatality-count-simulation-%03d.png -vcodec libx264 -crf 25  -pix_fmt yuv420p test.mp4')
 
   if(showPlots):
     plt.show()
